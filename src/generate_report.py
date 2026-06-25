@@ -175,6 +175,19 @@ AI_REPORT_SCHEMA: dict[str, Any] = {
     "required": ["market_summary", "stocks", "themes"],
 }
 
+DETAIL_REPORT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "summary": {"type": "string"},
+        "technical": {"type": "string"},
+        "news": {"type": "string"},
+        "valuation": {"type": "string"},
+        "risk": {"type": "string"},
+    },
+    "required": ["summary", "technical", "news", "valuation", "risk"],
+}
+
 
 def load_env() -> None:
     try:
@@ -476,6 +489,35 @@ def analyze_with_openai(inputs: dict[str, Any], model: str) -> dict[str, Any]:
     return json.loads(response.output_text)
 
 
+def analyze_detail_with_openai(inputs: dict[str, Any], model: str) -> dict[str, Any]:
+    try:
+        from openai import OpenAI
+    except ImportError as exc:
+        raise RuntimeError("openai 패키지가 설치되어 있지 않습니다. pip install -r requirements.txt 를 실행하세요.") from exc
+
+    client = OpenAI()
+    response = client.responses.create(
+        model=model,
+        instructions=(
+            "너는 한국 주식 단일 종목 분석 엔진이다. "
+            "투자 조언이나 매수 확정 표현은 피하고, 제공된 가격 지표와 뉴스만 근거로 판단한다. "
+            "수급 데이터는 없으므로 외국인, 기관, 수급이 좋다/나쁘다 같은 문장은 쓰지 않는다. "
+            "technical에는 RSI, 20일선, 60일선, 52주 위치를 해석하고, "
+            "news에는 제공된 뉴스의 영향 가능성을, valuation에는 PER과 과열/저평가 가능성을 보수적으로 쓴다."
+        ),
+        input=json.dumps(inputs, ensure_ascii=False),
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "stock_detail_report",
+                "schema": DETAIL_REPORT_SCHEMA,
+                "strict": False,
+            }
+        },
+    )
+    return json.loads(response.output_text)
+
+
 def clean_json_text(text: str) -> str:
     text = text.strip()
     if text.startswith("```"):
@@ -484,24 +526,13 @@ def clean_json_text(text: str) -> str:
     return text
 
 
-def request_gemini_once(inputs: dict[str, Any], model: str, api_key: str) -> dict[str, Any]:
+def request_gemini_json(inputs: dict[str, Any], model: str, api_key: str, task: str, schema: dict[str, Any]) -> dict[str, Any]:
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     timeout = int(os.getenv("GEMINI_TIMEOUT", "25"))
     prompt = {
         "role": "system",
-        "task": (
-            "너는 한국 주식 테마/수급 리포트를 만드는 분석 엔진이다. "
-            "투자 조언이나 매수 확정 표현은 피하고, 제공된 데이터와 뉴스만 근거로 점수화한다. "
-            "수급 데이터는 제공되지 않는다. 외국인, 기관, 수급이 좋다/나쁘다 같은 판단을 쓰지 말고 "
-            "가격 위치, PER, RSI, 이동평균선, 뉴스 모멘텀 중심으로 보수적으로 추정한다. "
-            "입력에는 전체 관심종목 중 사전 점수가 높은 일부 종목만 들어 있다. "
-            "출력 stocks에는 입력 stocks에 있는 종목만 포함한다. "
-            "market_summary, themes, stocks만 출력한다. 뉴스 목록과 수급 필드는 출력하지 않는다. "
-            "각 종목 impact_news에는 제공된 뉴스 중 해당 종목 점수에 가장 큰 영향을 준 기사 1개를 넣는다. "
-            "뉴스를 새로 만들지 말고 title, source, published_at, url은 입력 뉴스 값을 그대로 사용한다. "
-            "반드시 JSON 객체만 출력한다."
-        ),
-        "output_schema": AI_REPORT_SCHEMA,
+        "task": task,
+        "output_schema": schema,
         "input_data": inputs,
     }
     payload = {
@@ -538,6 +569,22 @@ def request_gemini_once(inputs: dict[str, Any], model: str, api_key: str) -> dic
     return json.loads(clean_json_text(text))
 
 
+def request_gemini_once(inputs: dict[str, Any], model: str, api_key: str) -> dict[str, Any]:
+    task = (
+        "너는 한국 주식 테마/수급 리포트를 만드는 분석 엔진이다. "
+        "투자 조언이나 매수 확정 표현은 피하고, 제공된 데이터와 뉴스만 근거로 점수화한다. "
+        "수급 데이터는 제공되지 않는다. 외국인, 기관, 수급이 좋다/나쁘다 같은 판단을 쓰지 말고 "
+        "가격 위치, PER, RSI, 이동평균선, 뉴스 모멘텀 중심으로 보수적으로 추정한다. "
+        "입력에는 전체 관심종목 중 사전 점수가 높은 일부 종목만 들어 있다. "
+        "출력 stocks에는 입력 stocks에 있는 종목만 포함한다. "
+        "market_summary, themes, stocks만 출력한다. 뉴스 목록과 수급 필드는 출력하지 않는다. "
+        "각 종목 impact_news에는 제공된 뉴스 중 해당 종목 점수에 가장 큰 영향을 준 기사 1개를 넣는다. "
+        "뉴스를 새로 만들지 말고 title, source, published_at, url은 입력 뉴스 값을 그대로 사용한다. "
+        "반드시 JSON 객체만 출력한다."
+    )
+    return request_gemini_json(inputs, model, api_key, task, AI_REPORT_SCHEMA)
+
+
 def analyze_with_gemini(inputs: dict[str, Any], model: str, api_key: str) -> dict[str, Any]:
     fallback_model = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite")
     models = [model]
@@ -558,6 +605,20 @@ def analyze_with_gemini(inputs: dict[str, Any], model: str, api_key: str) -> dic
     if last_error:
         raise last_error
     raise RuntimeError("Gemini API 요청 실패")
+
+
+def analyze_detail_with_gemini(inputs: dict[str, Any], model: str, api_key: str) -> dict[str, Any]:
+    task = (
+        "너는 한국 주식 단일 종목 분석 엔진이다. "
+        "투자 조언이나 매수 확정 표현은 피하고, 제공된 가격 지표와 뉴스만 근거로 판단한다. "
+        "수급 데이터는 없으므로 외국인, 기관, 수급이 좋다/나쁘다 같은 문장은 쓰지 않는다. "
+        "반드시 technical, news, valuation 세 관점이 서로 겹치지 않게 한두 문장씩 쓴다. "
+        "technical에는 RSI, 20일선, 60일선, 52주 위치를 해석한다. "
+        "news에는 제공된 뉴스의 주가 영향 가능성을 설명한다. "
+        "valuation에는 PER과 과열/저평가 가능성을 보수적으로 설명한다. "
+        "반드시 JSON 객체만 출력한다."
+    )
+    return request_gemini_json(inputs, model, api_key, task, DETAIL_REPORT_SCHEMA)
 
 
 def merge_computed_fields(report: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
@@ -705,6 +766,16 @@ def build_fallback_report(inputs: dict[str, Any], reason: str) -> dict[str, Any]
     }
 
 
+def build_scan_report(inputs: dict[str, Any]) -> dict[str, Any]:
+    report = build_fallback_report(inputs, "AI 호출 없이 로컬 정량 스캔")
+    report["market_summary"] = "관심 종목의 가격, PER, RSI, 이동평균선, 뉴스 기준으로 핫한 후보를 스캔했습니다. 종목 카드의 상세 AI 분석 버튼을 눌렀을 때만 AI를 호출합니다."
+    report["source"] = {
+        "mode": "scan",
+        "description": "AI 호출 없이 로컬 정량 지표와 수집 뉴스만 사용한 후보 스캔 결과입니다.",
+    }
+    return report
+
+
 def write_report(report: dict[str, Any], output_path: Path, source_mode: str) -> None:
     report["generated_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
     report.setdefault("source", {})
@@ -712,6 +783,7 @@ def write_report(report: dict[str, Any], output_path: Path, source_mode: str) ->
         "openai": "Python 수집기와 OpenAI Responses API로 생성한 분석 결과입니다.",
         "gemini": "Python 수집기와 Gemini API로 생성한 분석 결과입니다.",
         "fallback": "AI 호출 실패로 가격 지표와 수집 뉴스만 사용한 임시 결과입니다.",
+        "scan": "AI 호출 없이 로컬 정량 지표와 수집 뉴스만 사용한 후보 스캔 결과입니다.",
     }
     report["source"].update(
         {
@@ -730,6 +802,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--watchlist", type=Path, default=WATCHLIST_PATH)
     parser.add_argument("--output", type=Path, default=OUTPUT_PATH)
     parser.add_argument("--news-limit", type=int, default=2)
+    parser.add_argument("--scan-only", action="store_true", help="AI 호출 없이 로컬 정량 스캔 리포트만 생성")
     parser.add_argument("--sample", action="store_true", help="OpenAI 호출 없이 샘플 리포트 생성")
     return parser.parse_args()
 
@@ -762,6 +835,12 @@ def main() -> int:
 
     watchlist = read_watchlist(args.watchlist)
     inputs = collect_inputs(watchlist, args.news_limit)
+    if args.scan_only:
+        report = merge_computed_fields(build_scan_report(inputs), inputs)
+        write_report(report, args.output, "scan")
+        print(f"scan report written: {args.output}")
+        return 0
+
     fallback_report = build_fallback_report(inputs, "AI 분석 전 정량 산출")
     if provider == "gemini":
         model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")

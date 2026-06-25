@@ -45,6 +45,7 @@
         <button class="tab is-active" data-tab="picks">상승 기대</button>
         <button class="tab" data-tab="flow">수급</button>
         <button class="tab" data-tab="valuation">52주 위치</button>
+        <button class="tab" data-tab="top">Top 종목</button>
         <button class="tab" data-tab="themes">테마</button>
         <button class="tab" data-tab="news">뉴스</button>
       </nav>
@@ -122,6 +123,17 @@
           <p>누적 관심과 현재 자금 유입</p>
         </div>
         <div id="themeCards" class="theme-list"></div>
+      </section>
+
+      <section id="top" class="panel">
+        <div class="section-head">
+          <div>
+            <span class="pill red">제한폭</span>
+            <h2>오늘 상한가·하한가 Top 10</h2>
+          </div>
+          <p>이 탭에서는 분석 실행 버튼으로 갱신</p>
+        </div>
+        <div id="topMoverList" class="top-mover-grid"></div>
       </section>
 
       <section id="news" class="panel">

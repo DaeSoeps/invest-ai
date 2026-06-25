@@ -4,6 +4,10 @@ const state = {
   minScore: 60,
   onlyTwinBuy: false,
   report: null,
+  stockDetails: {},
+  loadingDetailCode: null,
+  topMovers: null,
+  isTopLoading: false,
   isAnalyzing: false,
   cooldownUntil: 0,
   cooldownTimer: null,
@@ -15,6 +19,7 @@ const els = {
   pickCards: document.querySelector("#pickCards"),
   flowRows: document.querySelector("#flowRows"),
   valuationRows: document.querySelector("#valuationRows"),
+  topMoverList: document.querySelector("#topMoverList"),
   themeCards: document.querySelector("#themeCards"),
   newsList: document.querySelector("#newsList"),
   searchInput: document.querySelector("#searchInput"),
@@ -73,6 +78,10 @@ function setAnalyzeState(isLoading, message) {
   els.analyzeStatus.textContent = message;
 }
 
+function currentAnalyzeLabel() {
+  return state.tab === "top" ? "Top 종목 분석 실행" : "핫한 후보 스캔";
+}
+
 function remainingCooldownSeconds() {
   return Math.max(0, Math.ceil((state.cooldownUntil - Date.now()) / 1000));
 }
@@ -101,12 +110,16 @@ function updateAnalyzeButton() {
     state.cooldownTimer = null;
   }
   els.analyzeButton.disabled = false;
-  els.analyzeButton.textContent = "AI 분석 실행";
+  els.analyzeButton.textContent = currentAnalyzeLabel();
 }
 
 async function runAnalysis() {
   if (state.isAnalyzing || remainingCooldownSeconds() > 0) return;
-  setAnalyzeState(true, "뉴스와 가격 데이터를 수집하고 AI 분석을 요청하는 중");
+  if (state.tab === "top") {
+    await runTopMovers();
+    return;
+  }
+  setAnalyzeState(true, "가격 지표와 뉴스를 수집해 핫한 후보를 스캔하는 중");
   startCooldown(30);
   try {
     const response = await fetch("./api/analyze", { method: "POST" });
@@ -128,6 +141,56 @@ async function runAnalysis() {
   } catch (error) {
     console.warn(error);
     setAnalyzeState(false, `분석 실패: ${error.message}`);
+  }
+}
+
+async function runTopMovers() {
+  if (state.isAnalyzing || remainingCooldownSeconds() > 0) return;
+  state.isTopLoading = true;
+  setAnalyzeState(true, "오늘 상한가와 하한가 종목을 불러오는 중");
+  startCooldown(30);
+  renderTopMovers();
+  try {
+    const response = await fetch("./api/top-movers", { method: "POST" });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      if (response.status === 429 && payload.retry_after) {
+        startCooldown(Number(payload.retry_after));
+      }
+      throw new Error(payload.message || "Top 종목 분석 실패");
+    }
+    state.topMovers = payload;
+    setAnalyzeState(false, payload.message || "Top 종목 표시 중");
+  } catch (error) {
+    console.warn(error);
+    setAnalyzeState(false, `Top 종목 실패: ${error.message}`);
+  } finally {
+    state.isTopLoading = false;
+    renderTopMovers();
+  }
+}
+
+async function analyzeStockDetail(code) {
+  if (state.loadingDetailCode) return;
+  state.loadingDetailCode = code;
+  render();
+  try {
+    const response = await fetch("./api/analyze-stock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.message || "상세 분석 실패");
+    }
+    state.stockDetails[code] = payload.detail;
+  } catch (error) {
+    console.warn(error);
+    state.stockDetails[code] = { error: error.message };
+  } finally {
+    state.loadingDetailCode = null;
+    render();
   }
 }
 
@@ -276,6 +339,33 @@ function renderImpactNews(stock) {
   `;
 }
 
+function renderStockDetail(stock) {
+  const detail = state.stockDetails[stock.code];
+  const isLoading = state.loadingDetailCode === stock.code;
+  if (isLoading) {
+    return `<div class="detail-box"><p>상세 AI 분석 중...</p></div>`;
+  }
+  if (detail?.error) {
+    return `<div class="detail-box error"><p>${detail.error}</p></div>`;
+  }
+  if (!detail) return "";
+  return `
+    <div class="detail-box">
+      <strong>${detail.summary || "상세 분석"}</strong>
+      <dl>
+        <dt>기술 지표</dt>
+        <dd>${detail.technical || "-"}</dd>
+        <dt>뉴스 영향</dt>
+        <dd>${detail.news || "-"}</dd>
+        <dt>밸류에이션</dt>
+        <dd>${detail.valuation || "-"}</dd>
+        <dt>리스크</dt>
+        <dd>${detail.risk || "-"}</dd>
+      </dl>
+    </div>
+  `;
+}
+
 function renderPicks(items) {
   els.pickCards.innerHTML = items.length
     ? items
@@ -296,10 +386,12 @@ function renderPicks(items) {
               <p>${stock.note}</p>
               <span class="risk">${stock.risk}</span>
               ${renderImpactNews(stock)}
+              ${renderStockDetail(stock)}
               <div class="meta-row">
                 <span class="chip">기대점수 ${stock.score}</span>
                 <span class="chip">${stock.theme}</span>
                 <span class="chip">${stock.signal}</span>
+                <button class="mini-button" type="button" data-detail-code="${stock.code}">상세 AI 분석</button>
               </div>
             </article>
           `
@@ -400,6 +492,57 @@ function renderNews() {
     : `<p class="empty">AI 분석 실행 후 수집 뉴스가 표시됩니다.</p>`;
 }
 
+function renderMoverColumn(title, items, kind) {
+  if (!items?.length) {
+    return `<section class="mover-column"><h3>${title}</h3><p class="empty">분석 실행 후 표시됩니다.</p></section>`;
+  }
+  return `
+    <section class="mover-column">
+      <h3>${title}</h3>
+      <div class="mover-list">
+        ${items
+          .map(
+            (item, index) => `
+              <article class="mover-card ${kind}">
+                <div class="mover-head">
+                  <span class="rank">${index + 1}</span>
+                  <div>
+                    <a href="${item.url}" target="_blank" rel="noreferrer">${item.name}</a>
+                    <small>${item.code}</small>
+                  </div>
+                  <strong>${item.change_rate || "-"}</strong>
+                </div>
+                <div class="mover-meta">
+                  <span>현재가 ${item.price || "-"}</span>
+                  <span>거래량 ${item.volume || "-"}</span>
+                  <span>PER ${item.per || "-"}</span>
+                </div>
+                <p>${item.reason}</p>
+                ${
+                  item.news_url
+                    ? `<a class="news-title" href="${item.news_url}" target="_blank" rel="noreferrer">${item.news_title}</a>`
+                    : ""
+                }
+              </article>
+            `
+          )
+          .join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderTopMovers() {
+  if (!els.topMoverList) return;
+  if (state.isTopLoading) {
+    els.topMoverList.innerHTML = `<p class="empty">상한가와 하한가 종목을 불러오는 중입니다.</p>`;
+    return;
+  }
+  els.topMoverList.innerHTML = state.topMovers
+    ? `${renderMoverColumn("상한가 Top 10", state.topMovers.upper, "upper")}${renderMoverColumn("하한가 Top 10", state.topMovers.lower, "lower")}`
+    : `<p class="empty">이 탭에서 분석 실행 버튼을 누르면 오늘 상한가·하한가 종목이 표시됩니다.</p>`;
+}
+
 function render() {
   if (!state.report) return;
   const items = filteredStocks();
@@ -407,10 +550,11 @@ function render() {
   els.scoreValue.textContent = state.minScore.toString();
   els.marketNote.textContent = state.report.market_summary;
   els.generatedAt.textContent = formatDate(state.report.generated_at);
-  renderPicks(items);
+  renderPicks(items.slice(0, 6));
   renderFlow(items);
   renderValuation(items);
   renderThemes();
+  renderTopMovers();
   renderNews();
 }
 
@@ -419,6 +563,10 @@ els.tabs.forEach((button) => {
     state.tab = button.dataset.tab;
     els.tabs.forEach((tab) => tab.classList.toggle("is-active", tab === button));
     els.panels.forEach((panel) => panel.classList.toggle("is-active", panel.id === state.tab));
+    updateAnalyzeButton();
+    if (state.tab === "top") {
+      els.analyzeStatus.textContent = "Top 종목 탭에서는 분석 실행 버튼으로 상한가·하한가를 불러옵니다.";
+    }
   });
 });
 
@@ -438,6 +586,11 @@ els.onlyTwinBuy.addEventListener("change", (event) => {
 });
 
 els.analyzeButton.addEventListener("click", runAnalysis);
+els.pickCards.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-detail-code]");
+  if (!button) return;
+  analyzeStockDetail(button.dataset.detailCode);
+});
 
 loadReport()
   .then((report) => {

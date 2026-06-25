@@ -4,6 +4,9 @@ const state = {
   minScore: 60,
   onlyTwinBuy: false,
   report: null,
+  isAnalyzing: false,
+  cooldownUntil: 0,
+  cooldownTimer: null,
 };
 
 const els = {
@@ -58,17 +61,53 @@ async function loadReport() {
 }
 
 function setAnalyzeState(isLoading, message) {
-  els.analyzeButton.disabled = isLoading;
-  els.analyzeButton.textContent = isLoading ? "분석 중..." : "AI 분석 실행";
+  state.isAnalyzing = isLoading;
+  updateAnalyzeButton();
   els.analyzeStatus.textContent = message;
 }
 
+function remainingCooldownSeconds() {
+  return Math.max(0, Math.ceil((state.cooldownUntil - Date.now()) / 1000));
+}
+
+function startCooldown(seconds = 30) {
+  state.cooldownUntil = Date.now() + seconds * 1000;
+  if (state.cooldownTimer) clearInterval(state.cooldownTimer);
+  state.cooldownTimer = setInterval(updateAnalyzeButton, 250);
+  updateAnalyzeButton();
+}
+
+function updateAnalyzeButton() {
+  const remaining = remainingCooldownSeconds();
+  if (state.isAnalyzing) {
+    els.analyzeButton.disabled = true;
+    els.analyzeButton.textContent = "분석 중...";
+    return;
+  }
+  if (remaining > 0) {
+    els.analyzeButton.disabled = true;
+    els.analyzeButton.textContent = `${remaining}초 후 가능`;
+    return;
+  }
+  if (state.cooldownTimer) {
+    clearInterval(state.cooldownTimer);
+    state.cooldownTimer = null;
+  }
+  els.analyzeButton.disabled = false;
+  els.analyzeButton.textContent = "AI 분석 실행";
+}
+
 async function runAnalysis() {
+  if (state.isAnalyzing || remainingCooldownSeconds() > 0) return;
   setAnalyzeState(true, "뉴스와 가격 데이터를 수집하고 AI 분석을 요청하는 중");
+  startCooldown(30);
   try {
     const response = await fetch("./api/analyze", { method: "POST" });
     const payload = await response.json();
     if (!response.ok || !payload.ok) {
+      if (response.status === 429 && payload.retry_after) {
+        startCooldown(Number(payload.retry_after));
+      }
       throw new Error(payload.stderr || payload.message || "AI 분석 실패");
     }
     state.report = {

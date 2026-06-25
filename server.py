@@ -4,12 +4,17 @@ import json
 import mimetypes
 import subprocess
 import sys
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parent
 REPORT_PATH = ROOT / "data" / "report.json"
+ANALYZE_COOLDOWN_SECONDS = 30
+_analyze_lock = threading.Lock()
+_last_analyze_at: float | None = None
 
 
 class InvestAIHandler(BaseHTTPRequestHandler):
@@ -38,6 +43,26 @@ class InvestAIHandler(BaseHTTPRequestHandler):
         if self.path != "/api/analyze":
             self.send_error(404)
             return
+
+        global _last_analyze_at
+        with _analyze_lock:
+            now = time.monotonic()
+            if _last_analyze_at is not None:
+                retry_after = ANALYZE_COOLDOWN_SECONDS - (now - _last_analyze_at)
+            else:
+                retry_after = 0
+            if retry_after > 0:
+                self.send_json(
+                    {
+                        "ok": False,
+                        "message": f"{int(retry_after) + 1}초 후 다시 분석할 수 있습니다.",
+                        "retry_after": int(retry_after) + 1,
+                    },
+                    status=429,
+                    headers={"Retry-After": str(int(retry_after) + 1)},
+                )
+                return
+            _last_analyze_at = now
 
         result = subprocess.run(
             [sys.executable, str(ROOT / "src" / "generate_report.py")],
@@ -71,12 +96,14 @@ class InvestAIHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(path.read_bytes())
 
-    def send_json(self, payload: dict, status: int = 200) -> None:
+    def send_json(self, payload: dict, status: int = 200, headers: dict[str, str] | None = None) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 

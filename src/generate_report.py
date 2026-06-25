@@ -9,6 +9,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
@@ -265,15 +266,70 @@ def analyze_with_openai(inputs: dict[str, Any], model: str) -> dict[str, Any]:
     return json.loads(response.output_text)
 
 
+def clean_json_text(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"```$", "", text).strip()
+    return text
+
+
+def analyze_with_gemini(inputs: dict[str, Any], model: str, api_key: str) -> dict[str, Any]:
+    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    prompt = {
+        "role": "system",
+        "task": (
+            "너는 한국 주식 테마/수급 리포트를 만드는 분석 엔진이다. "
+            "투자 조언이나 매수 확정 표현은 피하고, 제공된 데이터와 뉴스만 근거로 점수화한다. "
+            "수급 데이터가 없으면 가격 위치와 뉴스 모멘텀 중심으로 보수적으로 추정한다. "
+            "반드시 JSON 객체만 출력한다."
+        ),
+        "output_schema": REPORT_SCHEMA,
+        "input_data": inputs,
+    }
+    payload = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": json.dumps(prompt, ensure_ascii=False)}],
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.2,
+            "responseMimeType": "application/json",
+        },
+    }
+    request = Request(
+        endpoint,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=90) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Gemini API 요청 실패: HTTP {exc.code} {detail}") from exc
+
+    try:
+        text = body["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError) as exc:
+        raise RuntimeError(f"Gemini API 응답에서 텍스트를 찾지 못했습니다: {body}") from exc
+    return json.loads(clean_json_text(text))
+
+
 def write_report(report: dict[str, Any], output_path: Path, source_mode: str) -> None:
     report["generated_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
     report.setdefault("source", {})
+    descriptions = {
+        "openai": "Python 수집기와 OpenAI Responses API로 생성한 분석 결과입니다.",
+        "gemini": "Python 수집기와 Gemini API로 생성한 분석 결과입니다.",
+    }
     report["source"].update(
         {
             "mode": source_mode,
-            "description": "Python 수집기와 OpenAI Responses API로 생성한 분석 결과입니다."
-            if source_mode == "openai"
-            else report["source"].get("description", ""),
+            "description": descriptions.get(source_mode, report["source"].get("description", "")),
         }
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -295,24 +351,38 @@ def main() -> int:
     args = parse_args()
     load_env()
 
-    api_key = os.getenv("OPENAI_API_KEY")
-    model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
-
     if args.sample:
         report = sample_report()
         write_report(report, args.output, "sample")
         print(f"sample report written: {args.output}")
         return 0
 
-    if not api_key:
+    provider = os.getenv("AI_PROVIDER", "").strip().lower()
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if not provider:
+        provider = "gemini" if gemini_key else "openai"
+
+    if provider == "gemini" and not gemini_key:
+        print("GEMINI_API_KEY가 없습니다. .env에 키를 넣거나 --sample로 실행하세요.", file=sys.stderr)
+        return 2
+    if provider == "openai" and not openai_key:
         print("OPENAI_API_KEY가 없습니다. .env에 키를 넣거나 --sample로 실행하세요.", file=sys.stderr)
+        return 2
+    if provider not in {"gemini", "openai"}:
+        print("AI_PROVIDER는 gemini 또는 openai만 지원합니다.", file=sys.stderr)
         return 2
 
     watchlist = read_watchlist(args.watchlist)
     inputs = collect_inputs(watchlist, args.news_limit)
-    report = analyze_with_openai(inputs, model)
-    write_report(report, args.output, "openai")
-    print(f"openai report written: {args.output}")
+    if provider == "gemini":
+        model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        report = analyze_with_gemini(inputs, model, gemini_key)
+    else:
+        model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+        report = analyze_with_openai(inputs, model)
+    write_report(report, args.output, provider)
+    print(f"{provider} report written: {args.output}")
     return 0
 
 

@@ -23,7 +23,13 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-`.env`에 `OPENAI_API_KEY`를 넣은 뒤:
+`.env`에 사용할 AI 제공자와 키를 넣은 뒤:
+
+```bash
+AI_PROVIDER=gemini
+GEMINI_API_KEY=your-gemini-key
+GEMINI_MODEL=gemini-2.5-flash
+```
 
 ```bash
 python server.py

@@ -78,6 +78,10 @@ class InvestAIHandler(BaseHTTPRequestHandler):
                 message = "OpenAI API 할당량 또는 결제 설정을 확인해야 합니다."
             elif "OPENAI_API_KEY" in stderr:
                 message = "OPENAI_API_KEY가 설정되지 않았습니다."
+            elif "GEMINI_API_KEY" in stderr:
+                message = "GEMINI_API_KEY가 설정되지 않았습니다."
+            elif "Gemini API 요청 실패" in stderr:
+                message = "Gemini API 요청에 실패했습니다. 키, 무료 한도, 모델명을 확인하세요."
             self.send_json(
                 {
                     "ok": False,

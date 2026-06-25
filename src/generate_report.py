@@ -462,12 +462,92 @@ def merge_computed_fields(report: dict[str, Any], inputs: dict[str, Any]) -> dic
     return report
 
 
+def build_fallback_report(inputs: dict[str, Any], reason: str) -> dict[str, Any]:
+    news = []
+    for item in inputs.get("news", []):
+        news.append(
+            {
+                "time": item.get("time", ""),
+                "date": item.get("date", ""),
+                "published_at": item.get("published_at", ""),
+                "tag": item.get("tag", ""),
+                "title": item.get("title", ""),
+                "source": item.get("source", ""),
+                "url": item.get("url", ""),
+            }
+        )
+
+    stocks = []
+    for item in inputs.get("stocks", []):
+        price = item.get("price", {})
+        related_news = next(
+            (
+                news_item
+                for news_item in news
+                if item["name"] in news_item.get("title", "") or news_item.get("tag") == item["name"]
+            ),
+            {},
+        )
+        position = as_float(price.get("position_52")) or 0
+        rsi = as_float(price.get("rsi14"))
+        score = 50
+        if position >= 35:
+            score += 8
+        if position >= 80:
+            score -= 6
+        if rsi is not None and 40 <= rsi <= 70:
+            score += 8
+        elif rsi is not None and (rsi >= 80 or rsi <= 30):
+            score -= 8
+        score = max(0, min(100, score))
+        stocks.append(
+            {
+                "name": item["name"],
+                "code": item["code"],
+                "theme": item["theme"],
+                "score": score,
+                "conviction": "중" if score >= 55 else "하",
+                "note": "AI 분석이 지연되어 가격 지표와 수집 뉴스 기준으로 임시 산출했습니다.",
+                "risk": "AI 요약 미반영. 원천 뉴스와 가격 지표를 직접 확인하세요.",
+                "foreign": 0,
+                "foreign_streak": 0,
+                "ownership": 0,
+                "institution": 0,
+                "institution_streak": 0,
+                "signal": "수급 데이터 없음",
+                "position_52": price.get("position_52", 0),
+                "drawdown": price.get("drawdown", 0),
+                "market_cap": item.get("market_cap", "-"),
+                "per": item.get("per", "-"),
+                "impact_news": {
+                    "title": related_news.get("title", ""),
+                    "source": related_news.get("source", ""),
+                    "published_at": related_news.get("published_at", ""),
+                    "url": related_news.get("url", ""),
+                    "reason": "종목명과 매칭된 최신 수집 기사입니다." if related_news else "",
+                },
+            }
+        )
+
+    return {
+        "market_summary": f"AI 제공자가 일시적으로 응답하지 않아 정량 지표 중심 임시 리포트를 표시합니다. 원인: {reason}",
+        "stocks": sorted(stocks, key=lambda stock: stock["score"], reverse=True),
+        "themes": [],
+        "news": news,
+        "source": {
+            "mode": "fallback",
+            "description": "AI 호출 실패로 가격 지표와 수집 뉴스만 사용한 임시 결과입니다.",
+        },
+    }
+
+
 def write_report(report: dict[str, Any], output_path: Path, source_mode: str) -> None:
     report["generated_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
     report.setdefault("source", {})
     descriptions = {
         "openai": "Python 수집기와 OpenAI Responses API로 생성한 분석 결과입니다.",
         "gemini": "Python 수집기와 Gemini API로 생성한 분석 결과입니다.",
+        "fallback": "AI 호출 실패로 가격 지표와 수집 뉴스만 사용한 임시 결과입니다.",
     }
     report["source"].update(
         {
@@ -520,7 +600,14 @@ def main() -> int:
     inputs = collect_inputs(watchlist, args.news_limit)
     if provider == "gemini":
         model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-        report = analyze_with_gemini(inputs, model, gemini_key)
+        try:
+            report = analyze_with_gemini(inputs, model, gemini_key)
+        except RuntimeError as exc:
+            report = build_fallback_report(inputs, str(exc).splitlines()[0])
+            report = merge_computed_fields(report, inputs)
+            write_report(report, args.output, "fallback")
+            print(f"fallback report written: {args.output}", file=sys.stderr)
+            return 0
     else:
         model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
         report = analyze_with_openai(inputs, model)

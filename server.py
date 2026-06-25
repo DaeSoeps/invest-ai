@@ -98,7 +98,11 @@ class InvestAIHandler(BaseHTTPRequestHandler):
             return
 
         report = json.loads(REPORT_PATH.read_text(encoding="utf-8"))
-        self.send_json({"ok": True, "message": "AI 분석이 완료되었습니다.", "report": report})
+        mode = report.get("source", {}).get("mode")
+        message = "AI 분석이 완료되었습니다."
+        if mode == "fallback":
+            message = "AI 응답 지연으로 정량 지표 중심 임시 리포트를 표시합니다."
+        self.send_json({"ok": True, "message": message, "report": report})
 
     def send_json_file(self, path: Path) -> None:
         if not path.is_file():

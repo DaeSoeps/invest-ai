@@ -48,6 +48,18 @@ REPORT_SCHEMA: dict[str, Any] = {
                     "drawdown": {"type": "number"},
                     "market_cap": {"type": "string"},
                     "per": {"type": "string"},
+                    "impact_news": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "title": {"type": "string"},
+                            "source": {"type": "string"},
+                            "published_at": {"type": "string"},
+                            "url": {"type": "string"},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["title", "source", "published_at", "url", "reason"],
+                    },
                 },
                 "required": [
                     "name",
@@ -67,6 +79,7 @@ REPORT_SCHEMA: dict[str, Any] = {
                     "drawdown",
                     "market_cap",
                     "per",
+                    "impact_news",
                 ],
             },
         },
@@ -93,12 +106,14 @@ REPORT_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
                 "properties": {
                     "time": {"type": "string"},
+                    "date": {"type": "string"},
+                    "published_at": {"type": "string"},
                     "tag": {"type": "string"},
                     "title": {"type": "string"},
                     "source": {"type": "string"},
                     "url": {"type": "string"},
                 },
-                "required": ["time", "tag", "title", "source", "url"],
+                "required": ["time", "date", "published_at", "tag", "title", "source", "url"],
             },
         },
     },
@@ -170,6 +185,27 @@ def strip_html(text: str) -> str:
     return text.replace("&quot;", '"').replace("&amp;", "&").strip()
 
 
+def parse_rss_datetime(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        from email.utils import parsedate_to_datetime
+
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone()
+
+
+def format_news_date(value: str) -> tuple[str, str]:
+    parsed = parse_rss_datetime(value)
+    if not parsed:
+        return "", ""
+    return parsed.strftime("%Y-%m-%d"), parsed.strftime("%H:%M")
+
+
 def fetch_google_news(query: str, limit: int = 4) -> list[dict[str, str]]:
     url = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=ko&gl=KR&ceid=KR:ko"
     request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -190,11 +226,14 @@ def fetch_google_news(query: str, limit: int = 4) -> list[dict[str, str]]:
         link = item.findtext("link", default="")
         pub_date = item.findtext("pubDate", default="")
         source = item.findtext("source", default="Google News")
+        date_text, time_text = format_news_date(pub_date)
         items.append(
             {
                 "title": title,
                 "url": link,
                 "published_at": pub_date,
+                "date": date_text,
+                "time": time_text,
                 "source": source,
             }
         )
@@ -282,6 +321,8 @@ def analyze_with_gemini(inputs: dict[str, Any], model: str, api_key: str) -> dic
             "너는 한국 주식 테마/수급 리포트를 만드는 분석 엔진이다. "
             "투자 조언이나 매수 확정 표현은 피하고, 제공된 데이터와 뉴스만 근거로 점수화한다. "
             "수급 데이터가 없으면 가격 위치와 뉴스 모멘텀 중심으로 보수적으로 추정한다. "
+            "각 종목 impact_news에는 제공된 뉴스 중 해당 종목 점수에 가장 큰 영향을 준 기사 1개를 넣는다. "
+            "뉴스를 새로 만들지 말고 title, source, published_at, url은 입력 뉴스 값을 그대로 사용한다. "
             "반드시 JSON 객체만 출력한다."
         ),
         "output_schema": REPORT_SCHEMA,

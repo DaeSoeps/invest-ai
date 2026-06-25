@@ -40,6 +40,7 @@ function normalizeStock(stock) {
     position_52: Number(stock.position_52 ?? 0),
     drawdown: Number(stock.drawdown ?? 0),
     signal: stock.signal || "-",
+    impact_news: stock.impact_news || null,
   };
 }
 
@@ -158,6 +159,43 @@ function formatDate(value) {
   return `${date.toLocaleString("ko-KR")} 생성`;
 }
 
+function formatNewsDate(item) {
+  if (item.date && item.time) return `${item.date} ${item.time}`;
+  if (item.date) return item.date;
+  if (item.published_at) {
+    const date = new Date(item.published_at);
+    if (!Number.isNaN(date.getTime())) {
+      return date.toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" });
+    }
+    return item.published_at;
+  }
+  return item.time || "-";
+}
+
+function findImpactNews(stock) {
+  if (stock.impact_news?.title) return stock.impact_news;
+  const news = state.report?.news || [];
+  const direct = news.find((item) => item.tag === stock.name || item.title?.includes(stock.name));
+  if (direct) return { ...direct, reason: "종목명과 직접 매칭된 기사" };
+  const theme = news.find((item) => stock.theme && item.title?.includes(stock.theme));
+  return theme ? { ...theme, reason: "테마와 매칭된 기사" } : null;
+}
+
+function renderImpactNews(stock) {
+  const item = findImpactNews(stock);
+  if (!item?.title) return "";
+  const title = item.url
+    ? `<a href="${item.url}" target="_blank" rel="noreferrer">${item.title}</a>`
+    : `<strong>${item.title}</strong>`;
+  return `
+    <div class="impact-news">
+      <span>영향 뉴스</span>
+      ${title}
+      <small>${formatNewsDate(item)} · ${item.source || "출처 미상"}${item.reason ? ` · ${item.reason}` : ""}</small>
+    </div>
+  `;
+}
+
 function renderPicks(items) {
   els.pickCards.innerHTML = items.length
     ? items
@@ -176,6 +214,7 @@ function renderPicks(items) {
               </div>
               <p>${stock.note}</p>
               <span class="risk">${stock.risk}</span>
+              ${renderImpactNews(stock)}
               <div class="meta-row">
                 <span class="chip">기대점수 ${stock.score}</span>
                 <span class="chip">${stock.theme}</span>
@@ -266,7 +305,7 @@ function renderNews() {
           const title = item.url ? `<a class="news-title" href="${item.url}" target="_blank" rel="noreferrer">${item.title}</a>` : `<strong class="news-title">${item.title}</strong>`;
           return `
             <article class="news-item">
-              <span class="news-time">${item.time || "-"}</span>
+              <span class="news-time">${formatNewsDate(item)}</span>
               <span class="chip">${item.tag}</span>
               ${title}
               <span class="news-source">${item.source}</span>

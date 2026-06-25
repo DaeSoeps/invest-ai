@@ -346,6 +346,38 @@ h2 {
   line-height: 1.45;
 }
 
+.impact-news {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+  border-left: 3px solid var(--orange);
+  padding: 8px 0 8px 10px;
+}
+
+.impact-news span {
+  color: var(--orange);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.impact-news a,
+.impact-news strong {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.45;
+  text-decoration: none;
+}
+
+.impact-news a:hover {
+  text-decoration: underline;
+}
+
+.impact-news small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .meta-row {
   display: flex;
   flex-wrap: wrap;
@@ -439,7 +471,7 @@ th {
 
 .news-item {
   display: grid;
-  grid-template-columns: 64px 120px 1fr 100px;
+  grid-template-columns: 138px 120px 1fr 100px;
   gap: 12px;
   align-items: center;
   padding: 12px 16px;

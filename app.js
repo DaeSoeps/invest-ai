@@ -152,7 +152,7 @@ function formatSigned(value) {
 }
 
 function formatDate(value) {
-  if (!value) return "분석 결과";
+  if (!value) return "분석 대기 중";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return `${date.toLocaleString("ko-KR")} 생성`;
@@ -185,13 +185,14 @@ function renderPicks(items) {
           `
         )
         .join("")
-    : `<p class="empty">조건에 맞는 종목이 없습니다.</p>`;
+    : `<p class="empty">아직 표시할 종목이 없습니다. AI 분석 실행 후 결과가 여기에 표시됩니다.</p>`;
 }
 
 function renderFlow(items) {
-  els.flowRows.innerHTML = items
-    .map(
-      (stock) => `
+  els.flowRows.innerHTML = items.length
+    ? items
+        .map(
+          (stock) => `
         <tr>
           <td>${stock.name}</td>
           <td class="${signedClass(stock.foreign)}">${formatSigned(stock.foreign)}</td>
@@ -202,17 +203,19 @@ function renderFlow(items) {
           <td class="${stock.signal === "쌍끌이매수" ? "num-pos" : stock.signal === "쌍끌이매도" ? "num-neg" : ""}">${stock.signal}</td>
         </tr>
       `
-    )
-    .join("");
+        )
+        .join("")
+    : `<tr><td colspan="7" class="empty-cell">AI 분석 실행 후 수급 결과가 표시됩니다.</td></tr>`;
 }
 
 function renderValuation(items) {
-  els.valuationRows.innerHTML = items
-    .slice()
-    .sort((a, b) => b.position_52 - a.position_52)
-    .map((stock) => {
-      const hot = stock.position_52 >= 80 ? "hot" : "";
-      return `
+  els.valuationRows.innerHTML = items.length
+    ? items
+        .slice()
+        .sort((a, b) => b.position_52 - a.position_52)
+        .map((stock) => {
+          const hot = stock.position_52 >= 80 ? "hot" : "";
+          return `
         <tr>
           <td>${stock.name}${stock.position_52 >= 80 ? " · 고점권" : ""}</td>
           <td>
@@ -226,8 +229,9 @@ function renderValuation(items) {
           <td>${stock.per}</td>
         </tr>
       `;
-    })
-    .join("");
+        })
+        .join("")
+    : `<tr><td colspan="5" class="empty-cell">AI 분석 실행 후 가격 위치가 표시됩니다.</td></tr>`;
 }
 
 function renderThemes() {
@@ -248,7 +252,7 @@ function renderThemes() {
           `
         )
         .join("")
-    : `<p class="empty">테마 분석 결과가 없습니다.</p>`;
+    : `<p class="empty">AI 분석 실행 후 테마 순위와 근거가 표시됩니다.</p>`;
 }
 
 function renderNews() {
@@ -270,7 +274,7 @@ function renderNews() {
           `;
         })
         .join("")
-    : `<p class="empty">조건에 맞는 뉴스가 없습니다.</p>`;
+    : `<p class="empty">AI 분석 실행 후 수집 뉴스가 표시됩니다.</p>`;
 }
 
 function render() {
@@ -316,7 +320,7 @@ loadReport()
   .then((report) => {
     state.report = report;
     render();
-    setAnalyzeState(false, "기존 분석 결과 표시 중");
+    setAnalyzeState(false, report.source?.mode === "empty" ? "아직 분석을 실행하지 않았습니다." : "기존 분석 결과 표시 중");
   })
   .catch((error) => {
     console.error(error);

@@ -80,6 +80,10 @@ class InvestAIHandler(BaseHTTPRequestHandler):
                 message = "OPENAI_API_KEY가 설정되지 않았습니다."
             elif "GEMINI_API_KEY" in stderr:
                 message = "GEMINI_API_KEY가 설정되지 않았습니다."
+            elif "HTTP 503" in stderr or "UNAVAILABLE" in stderr:
+                message = "Gemini 모델 사용량이 많습니다. 잠시 후 다시 시도하세요."
+            elif "시간 초과" in stderr or "timed out" in stderr:
+                message = "Gemini 응답이 지연되고 있습니다. 잠시 후 다시 시도하세요."
             elif "Gemini API 요청 실패" in stderr:
                 message = "Gemini API 요청에 실패했습니다. 키, 무료 한도, 모델명을 확인하세요."
             self.send_json(

@@ -333,6 +333,72 @@ h2 {
   background: linear-gradient(90deg, var(--cyan), var(--green));
 }
 
+.metric-row {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.metric-badge {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 1px 5px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #111722;
+  padding: 7px;
+}
+
+.metric-badge b {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  grid-row: span 3;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.metric-badge span,
+.metric-badge em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.2;
+}
+
+.metric-badge strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metric-badge.good b {
+  background: rgba(69, 211, 155, 0.18);
+  color: var(--green);
+}
+
+.metric-badge.neutral b {
+  background: rgba(79, 140, 255, 0.16);
+  color: var(--blue);
+}
+
+.metric-badge.warn b {
+  background: rgba(255, 180, 84, 0.18);
+  color: var(--orange);
+}
+
+.metric-badge.bad b {
+  background: rgba(255, 107, 114, 0.18);
+  color: var(--red);
+}
+
 .stock-card p {
   color: var(--soft);
   line-height: 1.55;
@@ -397,7 +463,7 @@ h2 {
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 720px;
+  min-width: 980px;
 }
 
 th,
@@ -522,6 +588,10 @@ a.news-title:hover {
 
   .card-grid {
     grid-template-columns: 1fr;
+  }
+
+  .metric-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .news-item {

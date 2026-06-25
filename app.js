@@ -39,6 +39,12 @@ function normalizeStock(stock) {
     institution_streak: Number(stock.institution_streak ?? 0),
     position_52: Number(stock.position_52 ?? 0),
     drawdown: Number(stock.drawdown ?? 0),
+    current_price: stock.current_price == null ? null : Number(stock.current_price),
+    change_percent: stock.change_percent == null ? null : Number(stock.change_percent),
+    ma20: stock.ma20 == null ? null : Number(stock.ma20),
+    ma60: stock.ma60 == null ? null : Number(stock.ma60),
+    rsi14: stock.rsi14 == null ? null : Number(stock.rsi14),
+    flow_data_available: Boolean(stock.flow_data_available),
     signal: stock.signal || "-",
     impact_news: stock.impact_news || null,
   };
@@ -152,11 +158,85 @@ function formatSigned(value) {
   return value.toLocaleString("ko-KR");
 }
 
+function formatNumber(value, suffix = "") {
+  return value == null || Number.isNaN(value) ? "-" : `${value.toLocaleString("ko-KR")}${suffix}`;
+}
+
+function formatPrice(value) {
+  return value == null || Number.isNaN(value) ? "-" : `${Math.round(value).toLocaleString("ko-KR")}원`;
+}
+
 function formatDate(value) {
   if (!value) return "분석 대기 중";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return `${date.toLocaleString("ko-KR")} 생성`;
+}
+
+function parsePer(value) {
+  if (!value || value === "-") return null;
+  const parsed = Number(String(value).replace(/[^0-9.-]/g, ""));
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function metricState(type, stock) {
+  if (type === "per") {
+    const per = parsePer(stock.per);
+    if (per == null) return { level: "neutral", icon: "-", text: "PER 없음" };
+    if (per <= 0) return { level: "bad", icon: "!", text: "적자/비정상" };
+    if (per <= 15) return { level: "good", icon: "+", text: "낮음" };
+    if (per <= 30) return { level: "neutral", icon: "=", text: "보통" };
+    return { level: "warn", icon: "!", text: "높음" };
+  }
+  if (type === "rsi") {
+    const rsi = stock.rsi14;
+    if (rsi == null) return { level: "neutral", icon: "-", text: "RSI 없음" };
+    if (rsi >= 80) return { level: "bad", icon: "!", text: "과열" };
+    if (rsi >= 70) return { level: "warn", icon: "!", text: "주의" };
+    if (rsi >= 40) return { level: "good", icon: "+", text: "안정" };
+    if (rsi >= 30) return { level: "neutral", icon: "=", text: "약세" };
+    return { level: "warn", icon: "!", text: "침체" };
+  }
+  if (type === "ma20" || type === "ma60") {
+    const ma = stock[type];
+    const price = stock.current_price;
+    if (ma == null || price == null) return { level: "neutral", icon: "-", text: "이평 없음" };
+    const distance = ((price - ma) / ma) * 100;
+    if (distance >= 0) return { level: "good", icon: "+", text: `위 ${distance.toFixed(1)}%` };
+    if (distance >= -3) return { level: "warn", icon: "!", text: `근접 ${distance.toFixed(1)}%` };
+    return { level: "bad", icon: "!", text: `아래 ${distance.toFixed(1)}%` };
+  }
+  if (type === "position52") {
+    const position = stock.position_52;
+    if (position == null || Number.isNaN(position)) return { level: "neutral", icon: "-", text: "없음" };
+    if (position >= 85) return { level: "warn", icon: "!", text: "고점권" };
+    if (position >= 35) return { level: "good", icon: "+", text: "추세권" };
+    return { level: "neutral", icon: "=", text: "저점권" };
+  }
+  return { level: "neutral", icon: "-", text: "-" };
+}
+
+function renderMetricBadge(label, value, state) {
+  return `
+    <span class="metric-badge ${state.level}">
+      <b>${state.icon}</b>
+      <span>${label}</span>
+      <strong>${value}</strong>
+      <em>${state.text}</em>
+    </span>
+  `;
+}
+
+function renderStockMetrics(stock) {
+  return `
+    <div class="metric-row">
+      ${renderMetricBadge("PER", stock.per || "-", metricState("per", stock))}
+      ${renderMetricBadge("RSI", formatNumber(stock.rsi14), metricState("rsi", stock))}
+      ${renderMetricBadge("20일선", formatPrice(stock.ma20), metricState("ma20", stock))}
+      ${renderMetricBadge("60일선", formatPrice(stock.ma60), metricState("ma60", stock))}
+      ${renderMetricBadge("52주", `${stock.position_52.toFixed(1)}%`, metricState("position52", stock))}
+    </div>
+  `;
 }
 
 function formatNewsDate(item) {
@@ -212,6 +292,7 @@ function renderPicks(items) {
               <div class="score-line" aria-label="기대점수 ${stock.score}">
                 <span style="width:${stock.score}%"></span>
               </div>
+              ${renderStockMetrics(stock)}
               <p>${stock.note}</p>
               <span class="risk">${stock.risk}</span>
               ${renderImpactNews(stock)}
@@ -234,11 +315,11 @@ function renderFlow(items) {
           (stock) => `
         <tr>
           <td>${stock.name}</td>
-          <td class="${signedClass(stock.foreign)}">${formatSigned(stock.foreign)}</td>
-          <td class="${signedClass(stock.foreign_streak)}">${stock.foreign_streak}일</td>
-          <td>${stock.ownership.toFixed(2)}%</td>
-          <td class="${signedClass(stock.institution)}">${formatSigned(stock.institution)}</td>
-          <td class="${signedClass(stock.institution_streak)}">${stock.institution_streak}일</td>
+          <td class="${signedClass(stock.foreign)}">${stock.flow_data_available ? formatSigned(stock.foreign) : "-"}</td>
+          <td class="${signedClass(stock.foreign_streak)}">${stock.flow_data_available ? `${stock.foreign_streak}일` : "-"}</td>
+          <td>${stock.flow_data_available ? `${stock.ownership.toFixed(2)}%` : "-"}</td>
+          <td class="${signedClass(stock.institution)}">${stock.flow_data_available ? formatSigned(stock.institution) : "-"}</td>
+          <td class="${signedClass(stock.institution_streak)}">${stock.flow_data_available ? `${stock.institution_streak}일` : "-"}</td>
           <td class="${stock.signal === "쌍끌이매수" ? "num-pos" : stock.signal === "쌍끌이매도" ? "num-neg" : ""}">${stock.signal}</td>
         </tr>
       `
@@ -263,14 +344,17 @@ function renderValuation(items) {
               <b>${stock.position_52.toFixed(1)}%</b>
             </div>
           </td>
+          <td>${renderMetricBadge("RSI", formatNumber(stock.rsi14), metricState("rsi", stock))}</td>
+          <td>${renderMetricBadge("20일선", formatPrice(stock.ma20), metricState("ma20", stock))}</td>
+          <td>${renderMetricBadge("60일선", formatPrice(stock.ma60), metricState("ma60", stock))}</td>
           <td class="num-neg">${stock.drawdown.toFixed(1)}%</td>
           <td>${stock.market_cap}</td>
-          <td>${stock.per}</td>
+          <td>${renderMetricBadge("PER", stock.per || "-", metricState("per", stock))}</td>
         </tr>
       `;
         })
         .join("")
-    : `<tr><td colspan="5" class="empty-cell">AI 분석 실행 후 가격 위치가 표시됩니다.</td></tr>`;
+    : `<tr><td colspan="8" class="empty-cell">AI 분석 실행 후 가격 위치가 표시됩니다.</td></tr>`;
 }
 
 function renderThemes() {

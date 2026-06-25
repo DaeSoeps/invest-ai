@@ -5,7 +5,9 @@ import csv
 import json
 import os
 import re
+import socket
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -143,7 +145,40 @@ def read_watchlist(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(f))
 
 
-def fetch_price_snapshot(symbol: str) -> dict[str, Any]:
+def as_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if result != result:
+        return None
+    return result
+
+
+def round_optional(value: float | None, digits: int = 2) -> float | None:
+    return round(value, digits) if value is not None else None
+
+
+def calculate_rsi(closes: list[float], period: int = 14) -> float | None:
+    if len(closes) <= period:
+        return None
+    gains: list[float] = []
+    losses: list[float] = []
+    for previous, current in zip(closes[-period - 1 : -1], closes[-period:]):
+        change = current - previous
+        gains.append(max(change, 0))
+        losses.append(abs(min(change, 0)))
+    average_gain = sum(gains) / period
+    average_loss = sum(losses) / period
+    if average_loss == 0:
+        return 100.0
+    rs = average_gain / average_loss
+    return round(100 - (100 / (1 + rs)), 1)
+
+
+def fetch_price_snapshot(symbol: str, price_scale: float = 1.0) -> dict[str, Any]:
     try:
         import yfinance as yf
     except ImportError:
@@ -152,10 +187,16 @@ def fetch_price_snapshot(symbol: str) -> dict[str, Any]:
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.fast_info
-        last_price = float(info.get("last_price") or 0)
-        year_high = float(info.get("year_high") or 0)
-        year_low = float(info.get("year_low") or 0)
-        previous_close = float(info.get("previous_close") or 0)
+        history = ticker.history(period="1y", auto_adjust=False)
+        raw_closes = [float(value) for value in history["Close"].dropna().tolist()] if not history.empty else []
+        closes = [value * price_scale for value in raw_closes]
+        last_price = (as_float(info.get("last_price")) or (raw_closes[-1] if raw_closes else 0.0)) * price_scale
+        year_high = (as_float(info.get("year_high")) or (max(raw_closes) if raw_closes else 0.0)) * price_scale
+        year_low = (as_float(info.get("year_low")) or (min(raw_closes) if raw_closes else 0.0)) * price_scale
+        previous_close = (as_float(info.get("previous_close")) or (raw_closes[-2] if len(raw_closes) > 1 else 0.0)) * price_scale
+        ma20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else None
+        ma60 = sum(closes[-60:]) / 60 if len(closes) >= 60 else None
+        rsi14 = calculate_rsi(closes)
     except Exception:
         return {}
 
@@ -171,12 +212,16 @@ def fetch_price_snapshot(symbol: str) -> dict[str, Any]:
         drawdown = round((last_price - year_high) / year_high * 100, 1)
 
     return {
-        "last_price": last_price,
+        "current_price": round_optional(last_price, 0),
+        "last_price": round_optional(last_price, 0),
         "change_percent": change_percent,
-        "year_high": year_high,
-        "year_low": year_low,
+        "year_high": round_optional(year_high, 0),
+        "year_low": round_optional(year_low, 0),
         "position_52": max(0.0, min(100.0, position_52)),
         "drawdown": drawdown,
+        "ma20": round_optional(ma20, 0),
+        "ma60": round_optional(ma60, 0),
+        "rsi14": rsi14,
     }
 
 
@@ -245,7 +290,7 @@ def collect_inputs(watchlist: list[dict[str, str]], news_limit: int) -> dict[str
     news: list[dict[str, str]] = []
 
     for item in watchlist:
-        snapshot = fetch_price_snapshot(item["yahoo_symbol"])
+        snapshot = fetch_price_snapshot(item["yahoo_symbol"], as_float(item.get("price_scale")) or 1.0)
         stocks.append(
             {
                 "name": item["name"],
@@ -313,7 +358,7 @@ def clean_json_text(text: str) -> str:
     return text
 
 
-def analyze_with_gemini(inputs: dict[str, Any], model: str, api_key: str) -> dict[str, Any]:
+def request_gemini_once(inputs: dict[str, Any], model: str, api_key: str) -> dict[str, Any]:
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     prompt = {
         "role": "system",
@@ -347,17 +392,74 @@ def analyze_with_gemini(inputs: dict[str, Any], model: str, api_key: str) -> dic
         method="POST",
     )
     try:
-        with urlopen(request, timeout=90) as response:
+        with urlopen(request, timeout=45) as response:
             body = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"Gemini API 요청 실패: HTTP {exc.code} {detail}") from exc
+    except (TimeoutError, socket.timeout) as exc:
+        raise RuntimeError("Gemini API 요청 시간 초과") from exc
 
     try:
         text = body["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError) as exc:
         raise RuntimeError(f"Gemini API 응답에서 텍스트를 찾지 못했습니다: {body}") from exc
     return json.loads(clean_json_text(text))
+
+
+def analyze_with_gemini(inputs: dict[str, Any], model: str, api_key: str) -> dict[str, Any]:
+    fallback_model = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite")
+    models = [model]
+    if fallback_model and fallback_model not in models:
+        models.append(fallback_model)
+
+    last_error: Exception | None = None
+    for candidate in models:
+        for attempt in range(2):
+            try:
+                return request_gemini_once(inputs, candidate, api_key)
+            except RuntimeError as exc:
+                last_error = exc
+                message = str(exc)
+                if "HTTP 503" not in message and "UNAVAILABLE" not in message and "시간 초과" not in message:
+                    raise
+                if attempt < 1:
+                    time.sleep(2 + attempt)
+        if candidate != models[-1]:
+            print(f"{candidate} 사용량이 높아 {models[-1]}로 재시도합니다.", file=sys.stderr)
+    if last_error:
+        raise last_error
+    raise RuntimeError("Gemini API 요청 실패")
+
+
+def merge_computed_fields(report: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    source_by_code = {item["code"]: item for item in inputs.get("stocks", [])}
+    for stock in report.get("stocks", []):
+        source = source_by_code.get(stock.get("code"))
+        if not source:
+            continue
+        price = source.get("price", {})
+        stock["market_cap"] = source.get("market_cap", stock.get("market_cap", "-"))
+        stock["per"] = source.get("per", stock.get("per", "-"))
+        stock["current_price"] = price.get("current_price")
+        stock["change_percent"] = price.get("change_percent")
+        stock["year_high"] = price.get("year_high")
+        stock["year_low"] = price.get("year_low")
+        stock["position_52"] = price.get("position_52", stock.get("position_52", 0))
+        stock["drawdown"] = price.get("drawdown", stock.get("drawdown", 0))
+        stock["ma20"] = price.get("ma20")
+        stock["ma60"] = price.get("ma60")
+        stock["rsi14"] = price.get("rsi14")
+
+        # We do not have a reliable investor-flow data source yet, so never let the model invent it.
+        stock["flow_data_available"] = False
+        stock["foreign"] = 0
+        stock["foreign_streak"] = 0
+        stock["ownership"] = 0
+        stock["institution"] = 0
+        stock["institution_streak"] = 0
+        stock["signal"] = "수급 데이터 없음"
+    return report
 
 
 def write_report(report: dict[str, Any], output_path: Path, source_mode: str) -> None:
@@ -422,6 +524,7 @@ def main() -> int:
     else:
         model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
         report = analyze_with_openai(inputs, model)
+    report = merge_computed_fields(report, inputs)
     write_report(report, args.output, provider)
     print(f"{provider} report written: {args.output}")
     return 0

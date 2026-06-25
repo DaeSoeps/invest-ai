@@ -122,6 +122,59 @@ REPORT_SCHEMA: dict[str, Any] = {
     "required": ["market_summary", "stocks", "themes", "news"],
 }
 
+AI_REPORT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "market_summary": {"type": "string"},
+        "stocks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "name": {"type": "string"},
+                    "code": {"type": "string"},
+                    "score": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "conviction": {"type": "string", "enum": ["상", "중", "하"]},
+                    "note": {"type": "string"},
+                    "risk": {"type": "string"},
+                    "impact_news": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "title": {"type": "string"},
+                            "source": {"type": "string"},
+                            "published_at": {"type": "string"},
+                            "url": {"type": "string"},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["title", "source", "published_at", "url", "reason"],
+                    },
+                },
+                "required": ["name", "code", "score", "conviction", "note", "risk", "impact_news"],
+            },
+        },
+        "themes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "rank": {"type": "integer"},
+                    "name": {"type": "string"},
+                    "score": {"type": "number"},
+                    "status": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "names": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["rank", "name", "score", "status", "reason", "names"],
+            },
+        },
+    },
+    "required": ["market_summary", "stocks", "themes"],
+}
+
 
 def load_env() -> None:
     try:
@@ -302,12 +355,84 @@ def collect_inputs(watchlist: list[dict[str, str]], news_limit: int) -> dict[str
                 "price": snapshot,
             }
         )
-        news.extend(fetch_google_news(f'{item["name"]} 주식', limit=news_limit))
+        for article in fetch_google_news(f'{item["name"]} 주식', limit=news_limit):
+            article["tag"] = item["name"]
+            news.append(article)
 
     return {
         "collected_at": datetime.now(timezone.utc).isoformat(),
         "stocks": stocks,
         "news": news[: max(8, news_limit * len(watchlist))],
+    }
+
+
+def stock_pre_score(item: dict[str, Any]) -> int:
+    price = item.get("price", {})
+    position = as_float(price.get("position_52")) or 0
+    rsi = as_float(price.get("rsi14"))
+    current_price = as_float(price.get("current_price"))
+    ma20 = as_float(price.get("ma20"))
+    ma60 = as_float(price.get("ma60"))
+    per = as_float(re.sub(r"[^0-9.-]", "", item.get("per", ""))) if item.get("per") else None
+
+    score = 50
+    if 35 <= position < 85:
+        score += 10
+    elif position >= 85:
+        score -= 4
+    if rsi is not None and 40 <= rsi <= 70:
+        score += 8
+    elif rsi is not None and (rsi >= 80 or rsi <= 30):
+        score -= 8
+    if current_price is not None and ma20 is not None:
+        score += 8 if current_price >= ma20 else -6
+    if current_price is not None and ma60 is not None:
+        score += 6 if current_price >= ma60 else -8
+    if per is not None and 0 < per <= 30:
+        score += 4
+    return max(0, min(100, score))
+
+
+def compact_inputs_for_ai(inputs: dict[str, Any], max_stocks: int = 4, max_news_per_stock: int = 1) -> dict[str, Any]:
+    ranked = sorted(inputs.get("stocks", []), key=stock_pre_score, reverse=True)[:max_stocks]
+    compact_news: list[dict[str, str]] = []
+    compact_stocks: list[dict[str, Any]] = []
+
+    for stock in ranked:
+        related_news = [
+            news_item
+            for news_item in inputs.get("news", [])
+            if news_item.get("tag") == stock.get("name") or stock.get("name", "") in news_item.get("title", "")
+        ][:max_news_per_stock]
+        compact_news.extend(related_news)
+        price = stock.get("price", {})
+        compact_stocks.append(
+            {
+                "name": stock.get("name"),
+                "code": stock.get("code"),
+                "theme": stock.get("theme"),
+                "market_cap": stock.get("market_cap"),
+                "per": stock.get("per"),
+                "price": {
+                    "current_price": price.get("current_price"),
+                    "change_percent": price.get("change_percent"),
+                    "position_52": price.get("position_52"),
+                    "drawdown": price.get("drawdown"),
+                    "ma20": price.get("ma20"),
+                    "ma60": price.get("ma60"),
+                    "rsi14": price.get("rsi14"),
+                },
+            }
+        )
+
+    return {
+        "collected_at": inputs.get("collected_at"),
+        "analysis_scope": {
+            "total_stocks_collected": len(inputs.get("stocks", [])),
+            "stocks_sent_to_ai": len(compact_stocks),
+        },
+        "stocks": compact_stocks,
+        "news": compact_news,
     }
 
 
@@ -334,7 +459,8 @@ def analyze_with_openai(inputs: dict[str, Any], model: str) -> dict[str, Any]:
         instructions=(
             "너는 한국 주식 테마/수급 리포트를 만드는 분석 엔진이다. "
             "투자 조언이나 매수 확정 표현은 피하고, 제공된 데이터와 뉴스만 근거로 점수화한다. "
-            "수급 데이터가 없으면 가격 위치와 뉴스 모멘텀 중심으로 보수적으로 추정하고, "
+            "수급 데이터는 제공되지 않으므로 외국인, 기관, 수급이 좋다/나쁘다 같은 판단은 쓰지 말고 "
+            "가격 위치, PER, RSI, 이동평균선, 뉴스 모멘텀 중심으로 보수적으로 추정하고, "
             "각 종목 note와 risk에는 근거와 위험을 한 문장씩 한국어로 쓴다."
         ),
         input=json.dumps(inputs, ensure_ascii=False),
@@ -342,7 +468,7 @@ def analyze_with_openai(inputs: dict[str, Any], model: str) -> dict[str, Any]:
             "format": {
                 "type": "json_schema",
                 "name": "investment_report",
-                "schema": REPORT_SCHEMA,
+                "schema": AI_REPORT_SCHEMA,
                 "strict": False,
             }
         },
@@ -360,17 +486,22 @@ def clean_json_text(text: str) -> str:
 
 def request_gemini_once(inputs: dict[str, Any], model: str, api_key: str) -> dict[str, Any]:
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    timeout = int(os.getenv("GEMINI_TIMEOUT", "25"))
     prompt = {
         "role": "system",
         "task": (
             "너는 한국 주식 테마/수급 리포트를 만드는 분석 엔진이다. "
             "투자 조언이나 매수 확정 표현은 피하고, 제공된 데이터와 뉴스만 근거로 점수화한다. "
-            "수급 데이터가 없으면 가격 위치와 뉴스 모멘텀 중심으로 보수적으로 추정한다. "
+            "수급 데이터는 제공되지 않는다. 외국인, 기관, 수급이 좋다/나쁘다 같은 판단을 쓰지 말고 "
+            "가격 위치, PER, RSI, 이동평균선, 뉴스 모멘텀 중심으로 보수적으로 추정한다. "
+            "입력에는 전체 관심종목 중 사전 점수가 높은 일부 종목만 들어 있다. "
+            "출력 stocks에는 입력 stocks에 있는 종목만 포함한다. "
+            "market_summary, themes, stocks만 출력한다. 뉴스 목록과 수급 필드는 출력하지 않는다. "
             "각 종목 impact_news에는 제공된 뉴스 중 해당 종목 점수에 가장 큰 영향을 준 기사 1개를 넣는다. "
             "뉴스를 새로 만들지 말고 title, source, published_at, url은 입력 뉴스 값을 그대로 사용한다. "
             "반드시 JSON 객체만 출력한다."
         ),
-        "output_schema": REPORT_SCHEMA,
+        "output_schema": AI_REPORT_SCHEMA,
         "input_data": inputs,
     }
     payload = {
@@ -392,7 +523,7 @@ def request_gemini_once(inputs: dict[str, Any], model: str, api_key: str) -> dic
         method="POST",
     )
     try:
-        with urlopen(request, timeout=45) as response:
+        with urlopen(request, timeout=timeout) as response:
             body = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
@@ -415,16 +546,13 @@ def analyze_with_gemini(inputs: dict[str, Any], model: str, api_key: str) -> dic
 
     last_error: Exception | None = None
     for candidate in models:
-        for attempt in range(2):
-            try:
-                return request_gemini_once(inputs, candidate, api_key)
-            except RuntimeError as exc:
-                last_error = exc
-                message = str(exc)
-                if "HTTP 503" not in message and "UNAVAILABLE" not in message and "시간 초과" not in message:
-                    raise
-                if attempt < 1:
-                    time.sleep(2 + attempt)
+        try:
+            return request_gemini_once(inputs, candidate, api_key)
+        except RuntimeError as exc:
+            last_error = exc
+            message = str(exc)
+            if "HTTP 503" not in message and "UNAVAILABLE" not in message and "시간 초과" not in message:
+                raise
         if candidate != models[-1]:
             print(f"{candidate} 사용량이 높아 {models[-1]}로 재시도합니다.", file=sys.stderr)
     if last_error:
@@ -460,6 +588,42 @@ def merge_computed_fields(report: dict[str, Any], inputs: dict[str, Any]) -> dic
         stock["institution_streak"] = 0
         stock["signal"] = "수급 데이터 없음"
     return report
+
+
+def remove_flow_claims(text: str) -> str:
+    if "수급" not in text:
+        return text
+    sentences = re.split(r"(?<=[.!?。]|[다요음임함됨됨니다])\s+", text)
+    kept = [sentence.strip() for sentence in sentences if sentence.strip() and "수급" not in sentence]
+    return " ".join(kept) or "가격 지표와 뉴스 기준으로 평가했습니다."
+
+
+def merge_ai_report(base_report: dict[str, Any], ai_report: dict[str, Any]) -> dict[str, Any]:
+    merged = json.loads(json.dumps(base_report, ensure_ascii=False))
+
+    if ai_report.get("market_summary"):
+        merged["market_summary"] = ai_report["market_summary"]
+    if isinstance(ai_report.get("themes"), list):
+        merged["themes"] = ai_report["themes"]
+
+    ai_by_code = {
+        stock.get("code"): stock
+        for stock in ai_report.get("stocks", [])
+        if isinstance(stock, dict) and stock.get("code")
+    }
+    for stock in merged.get("stocks", []):
+        ai_stock = ai_by_code.get(stock.get("code"))
+        if not ai_stock:
+            continue
+        for key in ("score", "conviction", "note", "risk", "impact_news"):
+            if ai_stock.get(key) not in (None, ""):
+                value = ai_stock[key]
+                if key in {"note", "risk"} and isinstance(value, str):
+                    value = remove_flow_claims(value)
+                stock[key] = value
+
+    merged["stocks"] = sorted(merged.get("stocks", []), key=lambda stock: stock.get("score", 0), reverse=True)
+    return merged
 
 
 def build_fallback_report(inputs: dict[str, Any], reason: str) -> dict[str, Any]:
@@ -598,10 +762,11 @@ def main() -> int:
 
     watchlist = read_watchlist(args.watchlist)
     inputs = collect_inputs(watchlist, args.news_limit)
+    fallback_report = build_fallback_report(inputs, "AI 분석 전 정량 산출")
     if provider == "gemini":
         model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
         try:
-            report = analyze_with_gemini(inputs, model, gemini_key)
+            report = merge_ai_report(fallback_report, analyze_with_gemini(compact_inputs_for_ai(inputs), model, gemini_key))
         except RuntimeError as exc:
             report = build_fallback_report(inputs, str(exc).splitlines()[0])
             report = merge_computed_fields(report, inputs)
@@ -610,7 +775,7 @@ def main() -> int:
             return 0
     else:
         model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
-        report = analyze_with_openai(inputs, model)
+        report = merge_ai_report(fallback_report, analyze_with_openai(compact_inputs_for_ai(inputs), model))
     report = merge_computed_fields(report, inputs)
     write_report(report, args.output, provider)
     print(f"{provider} report written: {args.output}")

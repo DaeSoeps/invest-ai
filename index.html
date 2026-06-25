@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>테마 수급 투자 대시보드</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">2026-06-24 수집 기준</p>
+          <h1>주식 테마 분석 리포트</h1>
+        </div>
+        <div class="summary-card">
+          <span>관심 종목</span>
+          <strong id="watchCount">0</strong>
+        </div>
+      </header>
+
+      <section class="market-note">
+        <span class="note-label">시장 요약</span>
+        <p>
+          글로벌 반도체 투자 확대와 AI 전환 기대가 이어지는 가운데, 환율과 수급 변동성이
+          동반되고 있습니다. 수급, 테마 강도, 가격 위치를 함께 확인하는 방식으로 추격매수
+          위험을 낮춥니다.
+        </p>
+      </section>
+
+      <section class="controls" aria-label="검색 및 필터">
+        <label class="search-field">
+          <span>검색</span>
+          <input id="searchInput" type="search" placeholder="종목명, 코드, 테마" />
+        </label>
+        <label class="range-field">
+          <span>최소 기대점수 <b id="scoreValue">60</b></span>
+          <input id="scoreRange" type="range" min="50" max="90" value="60" />
+        </label>
+        <label class="toggle-field">
+          <input id="onlyTwinBuy" type="checkbox" />
+          <span>쌍끌이 매수만</span>
+        </label>
+      </section>
+
+      <nav class="tabs" aria-label="리포트 보기">
+        <button class="tab is-active" data-tab="picks">상승 기대</button>
+        <button class="tab" data-tab="flow">수급</button>
+        <button class="tab" data-tab="valuation">52주 위치</button>
+        <button class="tab" data-tab="themes">테마</button>
+        <button class="tab" data-tab="news">뉴스</button>
+      </nav>
+
+      <section id="picks" class="panel is-active">
+        <div class="section-head">
+          <div>
+            <span class="pill red">내일 주목</span>
+            <h2>상승 기대 종목</h2>
+          </div>
+          <p>신호 종합 점수 기준</p>
+        </div>
+        <div id="pickCards" class="card-grid"></div>
+      </section>
+
+      <section id="flow" class="panel">
+        <div class="section-head">
+          <div>
+            <span class="pill blue">수급</span>
+            <h2>외국인·기관 순매수</h2>
+          </div>
+          <p>단위: 억원</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>종목</th>
+                <th>외국인</th>
+                <th>연속</th>
+                <th>보유율</th>
+                <th>기관</th>
+                <th>연속</th>
+                <th>신호</th>
+              </tr>
+            </thead>
+            <tbody id="flowRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="valuation" class="panel">
+        <div class="section-head">
+          <div>
+            <span class="pill blue">가격위치</span>
+            <h2>고점추격 vs 선취매</h2>
+          </div>
+          <p>52주 위치가 높을수록 과열 점검 필요</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>종목</th>
+                <th>52주 위치</th>
+                <th>고점대비</th>
+                <th>시가총액</th>
+                <th>PER</th>
+              </tr>
+            </thead>
+            <tbody id="valuationRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="themes" class="panel">
+        <div class="section-head">
+          <div>
+            <span class="pill green">테마</span>
+            <h2>테마 순위와 근거</h2>
+          </div>
+          <p>누적 관심과 현재 자금 유입</p>
+        </div>
+        <div id="themeCards" class="theme-list"></div>
+      </section>
+
+      <section id="news" class="panel">
+        <div class="section-head">
+          <div>
+            <span class="pill gray">뉴스</span>
+            <h2>수집 뉴스</h2>
+          </div>
+          <p>근거 확인용</p>
+        </div>
+        <div id="newsList" class="news-list"></div>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

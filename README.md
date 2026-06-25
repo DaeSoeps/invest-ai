@@ -6,6 +6,7 @@ Python으로 관심 종목 데이터를 모으고 OpenAI API에 분석을 요청
 
 ```text
 config/watchlist.csv     관심 종목 목록
+server.py                대시보드 서버 + 분석 실행 API
 src/generate_report.py   데이터 수집 + OpenAI 분석 + JSON 생성
 data/report.json         프론트가 읽는 분석 결과
 index.html               대시보드 화면
@@ -25,17 +26,18 @@ cp .env.example .env
 `.env`에 `OPENAI_API_KEY`를 넣은 뒤:
 
 ```bash
-python src/generate_report.py
-python3 -m http.server 5173
+python server.py
 ```
 
 브라우저에서 `http://localhost:5173`을 열면 됩니다.
 
-API 키 없이 화면만 확인하려면:
+화면을 여는 것만으로는 OpenAI API를 호출하지 않습니다. 대시보드의 `AI 분석 실행` 버튼을 눌렀을 때만 새 분석을 요청하고 `data/report.json`을 갱신합니다.
+
+API 키 없이 기존 샘플 결과만 확인하려면:
 
 ```bash
 python src/generate_report.py --sample
-python3 -m http.server 5173
+python server.py
 ```
 
 ## 주의

@@ -115,7 +115,7 @@ h2 {
 
 .controls {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(220px, 320px) max-content;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 320px) max-content max-content;
   align-items: center;
   gap: 14px;
   padding: 14px;
@@ -161,6 +161,29 @@ h2 {
   width: 18px;
   height: 18px;
   accent-color: var(--cyan);
+}
+
+.analyze-button {
+  min-height: 42px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--green);
+  color: #07120d;
+  cursor: pointer;
+  font-weight: 900;
+  padding: 0 16px;
+  white-space: nowrap;
+}
+
+.analyze-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.analyze-status {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .tabs {

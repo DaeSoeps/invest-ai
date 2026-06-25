@@ -289,11 +289,15 @@ def main() -> int:
     api_key = os.getenv("OPENAI_API_KEY")
     model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 
-    if args.sample or not api_key:
+    if args.sample:
         report = sample_report()
         write_report(report, args.output, "sample")
         print(f"sample report written: {args.output}")
         return 0
+
+    if not api_key:
+        print("OPENAI_API_KEY가 없습니다. .env에 키를 넣거나 --sample로 실행하세요.", file=sys.stderr)
+        return 2
 
     watchlist = read_watchlist(args.watchlist)
     inputs = collect_inputs(watchlist, args.news_limit)

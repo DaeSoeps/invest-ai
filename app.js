@@ -21,6 +21,8 @@ const els = {
   watchCount: document.querySelector("#watchCount"),
   marketNote: document.querySelector(".market-note p"),
   generatedAt: document.querySelector(".eyebrow"),
+  analyzeButton: document.querySelector("#analyzeButton"),
+  analyzeStatus: document.querySelector("#analyzeStatus"),
 };
 
 function normalizeStock(stock) {
@@ -39,7 +41,10 @@ function normalizeStock(stock) {
 }
 
 async function loadReport() {
-  const response = await fetch("./data/report.json", { cache: "no-store" });
+  let response = await fetch("./api/report", { cache: "no-store" }).catch(() => null);
+  if (!response || !response.ok) {
+    response = await fetch("./data/report.json", { cache: "no-store" });
+  }
   if (!response.ok) {
     throw new Error(`report.json load failed: ${response.status}`);
   }
@@ -50,6 +55,34 @@ async function loadReport() {
     themes: report.themes || [],
     news: report.news || [],
   };
+}
+
+function setAnalyzeState(isLoading, message) {
+  els.analyzeButton.disabled = isLoading;
+  els.analyzeButton.textContent = isLoading ? "분석 중..." : "AI 분석 실행";
+  els.analyzeStatus.textContent = message;
+}
+
+async function runAnalysis() {
+  setAnalyzeState(true, "뉴스와 가격 데이터를 수집하고 AI 분석을 요청하는 중");
+  try {
+    const response = await fetch("./api/analyze", { method: "POST" });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.stderr || payload.message || "AI 분석 실패");
+    }
+    state.report = {
+      ...payload.report,
+      stocks: (payload.report.stocks || []).map(normalizeStock),
+      themes: payload.report.themes || [],
+      news: payload.report.news || [],
+    };
+    render();
+    setAnalyzeState(false, payload.message || "새 분석 결과 표시 중");
+  } catch (error) {
+    console.warn(error);
+    setAnalyzeState(false, `분석 실패: ${error.message}`);
+  }
 }
 
 function matchesStock(stock) {
@@ -238,10 +271,13 @@ els.onlyTwinBuy.addEventListener("change", (event) => {
   render();
 });
 
+els.analyzeButton.addEventListener("click", runAnalysis);
+
 loadReport()
   .then((report) => {
     state.report = report;
     render();
+    setAnalyzeState(false, "기존 분석 결과 표시 중");
   })
   .catch((error) => {
     console.error(error);

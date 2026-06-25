@@ -108,7 +108,7 @@ async function runAnalysis() {
       if (response.status === 429 && payload.retry_after) {
         startCooldown(Number(payload.retry_after));
       }
-      throw new Error(payload.stderr || payload.message || "AI 분석 실패");
+      throw new Error(payload.message || "AI 분석 실패");
     }
     state.report = {
       ...payload.report,

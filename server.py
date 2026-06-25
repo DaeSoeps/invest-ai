@@ -72,11 +72,17 @@ class InvestAIHandler(BaseHTTPRequestHandler):
             timeout=180,
         )
         if result.returncode != 0:
+            stderr = result.stderr.strip()
+            message = "AI 분석 실행에 실패했습니다."
+            if "insufficient_quota" in stderr or "exceeded your current quota" in stderr:
+                message = "OpenAI API 할당량 또는 결제 설정을 확인해야 합니다."
+            elif "OPENAI_API_KEY" in stderr:
+                message = "OPENAI_API_KEY가 설정되지 않았습니다."
             self.send_json(
                 {
                     "ok": False,
-                    "message": "AI 분석 실행에 실패했습니다.",
-                    "stderr": result.stderr.strip(),
+                    "message": message,
+                    "stderr": stderr,
                     "stdout": result.stdout.strip(),
                 },
                 status=500,

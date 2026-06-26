@@ -513,11 +513,29 @@ function renderMoverColumn(title, items, kind) {
                   <strong>${item.change_rate || "-"}</strong>
                 </div>
                 <div class="mover-meta">
+                  <span>${item.signal || item.label || "-"}</span>
                   <span>현재가 ${item.price || "-"}</span>
                   <span>거래량 ${item.volume || "-"}</span>
                   <span>PER ${item.per || "-"}</span>
                 </div>
+                ${
+                  item.theme_tags?.length
+                    ? `<div class="tag-row">${item.theme_tags
+                        .map((theme) => `<span class="theme-tag">${theme.name}${theme.keywords?.length ? ` · ${theme.keywords.join(", ")}` : ""}</span>`)
+                        .join("")}</div>`
+                    : ""
+                }
                 <p>${item.reason}</p>
+                ${
+                  item.risk_flags?.length
+                    ? `<div class="risk-flags">${item.risk_flags.map((flag) => `<span>${flag}</span>`).join("")}</div>`
+                    : ""
+                }
+                ${
+                  item.checklist?.length
+                    ? `<ul class="mover-checklist">${item.checklist.map((text) => `<li>${text}</li>`).join("")}</ul>`
+                    : ""
+                }
                 ${
                   item.news_url
                     ? `<a class="news-title" href="${item.news_url}" target="_blank" rel="noreferrer">${item.news_title}</a>`

@@ -39,6 +39,74 @@ def parse_number_text(value: str) -> str:
     return re.sub(r"\s+", " ", strip_tags(value))
 
 
+THEME_RULES = [
+    ("반도체/AI 인프라", ("반도체", "HBM", "패키징", "AI", "데이터센터", "광주", "전남", "호남", "첨단")),
+    ("신재생/전력", ("신재생", "태양광", "풍력", "ESS", "전력", "RE100", "에너지", "인버터")),
+    ("전기차/부품", ("전기차", "EV", "배터리", "2차전지", "콘덴서", "캐패시터", "커패시터")),
+    ("자본재편", ("감자", "유상증자", "무상증자", "주식병합", "변경상장", "거래재개", "투자설명서", "신주")),
+    ("수주/실적", ("수주", "공급계약", "실적", "흑자", "매출", "영업이익")),
+]
+
+RISK_RULES = [
+    ("검토 단계", ("검토", "가능성", "거론", "추진", "예정", "기대")),
+    ("재무 이벤트", ("감자", "유상증자", "결손", "채무", "적자", "주식병합")),
+    ("단기 과열", ("상한가", "급등", "2연속", "연속", "가격제한폭")),
+]
+
+
+def find_keywords(text: str, keywords: tuple[str, ...]) -> list[str]:
+    lowered = text.lower()
+    return [keyword for keyword in keywords if keyword.lower() in lowered]
+
+
+def classify_mover_reason(name: str, label: str, headline: str, source: str, streak: str, accumulated: str, per: str = "") -> dict:
+    text = f"{name} {headline}"
+    themes = []
+    for theme, keywords in THEME_RULES:
+        matched = find_keywords(text, keywords)
+        if matched:
+            themes.append({"name": theme, "keywords": matched[:4]})
+
+    risks = []
+    for risk, keywords in RISK_RULES:
+        matched = find_keywords(text, keywords)
+        if matched:
+            risks.append(risk)
+    if streak and streak not in {"-", "0", "1"}:
+        risks.append(f"{streak}연속 {label}")
+    if per.strip().startswith("-"):
+        risks.append("PER 음수")
+
+    if headline:
+        reason = f"{headline} 재료가 {label} 배경으로 잡혔습니다."
+    else:
+        reason = f"{label} 종목이지만 직접 매칭된 최신 뉴스가 부족합니다."
+    if themes:
+        theme_names = ", ".join(theme["name"] for theme in themes[:2])
+        reason = f"{theme_names} 테마가 붙었습니다. {reason}"
+
+    signal = "관망"
+    if label == "상한가" and themes:
+        signal = "테마 급등"
+    if "재무 이벤트" in risks:
+        signal = "재무 이벤트 주의"
+    if label == "하한가":
+        signal = "급락 원인 확인"
+
+    return {
+        "reason": reason,
+        "theme_tags": themes[:3],
+        "risk_flags": list(dict.fromkeys(risks))[:4],
+        "signal": signal,
+        "source_hint": f"{source} 기사 기반" if source else "가격 제한폭 데이터 기반",
+        "checklist": [
+            "뉴스가 실제 회사 실적/수주로 연결되는지 확인",
+            "공시와 유상증자/감자 같은 자본 이벤트 확인",
+            "연속 상한가 이후 거래대금과 시초가 변동성 확인",
+        ],
+    }
+
+
 def fetch_naver_movers(kind: str, limit: int = 10) -> list[dict]:
     path = "sise_upper.naver" if kind == "upper" else "sise_lower.naver"
     label = "상한가" if kind == "upper" else "하한가"
@@ -56,11 +124,22 @@ def fetch_naver_movers(kind: str, limit: int = 10) -> list[dict]:
         if len(cells) < 7:
             continue
         name = strip_tags(link.group(2))
-        news = fetch_google_news(f"{name} 주식 {label}", limit=1)
+        news_query = f"{name} 주식 {label}"
+        if kind == "upper":
+            news_query = f"{name} 상한가 이유 반도체 신재생"
+        news = fetch_google_news(news_query, limit=1)
         headline = news[0]["title"] if news else ""
         source = news[0]["source"] if news else ""
         news_url = news[0]["url"] if news else ""
-        reason = f"{headline} 이슈가 당일 {label} 배경으로 거론됩니다." if headline else f"거래량과 가격 제한폭 도달 여부를 확인해야 합니다."
+        reason_detail = classify_mover_reason(
+            name=name,
+            label=label,
+            headline=headline,
+            source=source,
+            streak=parse_number_text(cells[1]),
+            accumulated=parse_number_text(cells[2]),
+            per=parse_number_text(cells[11]) if len(cells) > 11 else "",
+        )
         rows.append(
             {
                 "kind": kind,
@@ -74,7 +153,12 @@ def fetch_naver_movers(kind: str, limit: int = 10) -> list[dict]:
                 "change_rate": parse_number_text(cells[6]),
                 "volume": parse_number_text(cells[7]) if len(cells) > 7 else "-",
                 "per": parse_number_text(cells[11]) if len(cells) > 11 else "-",
-                "reason": reason,
+                "reason": reason_detail["reason"],
+                "theme_tags": reason_detail["theme_tags"],
+                "risk_flags": reason_detail["risk_flags"],
+                "signal": reason_detail["signal"],
+                "source_hint": reason_detail["source_hint"],
+                "checklist": reason_detail["checklist"],
                 "news_title": headline,
                 "news_source": source,
                 "news_url": news_url,

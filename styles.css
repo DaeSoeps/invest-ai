@@ -668,6 +668,44 @@ th {
   padding: 4px 8px;
 }
 
+.tag-row,
+.risk-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.theme-tag,
+.risk-flags span {
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 8px;
+}
+
+.theme-tag {
+  background: rgba(48, 214, 192, 0.12);
+  color: var(--cyan);
+}
+
+.risk-flags span {
+  background: rgba(255, 180, 84, 0.14);
+  color: var(--orange);
+}
+
+.mover-checklist {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.mover-checklist li {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .mover-card p {
   color: var(--soft);
   font-size: 13px;

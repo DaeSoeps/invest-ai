@@ -7,6 +7,8 @@ const state = {
   stockDetails: {},
   loadingDetailCode: null,
   topMovers: null,
+  history: [],
+  isHistoryLoading: false,
   isTopLoading: false,
   isAnalyzing: false,
   cooldownUntil: 0,
@@ -20,6 +22,7 @@ const els = {
   flowRows: document.querySelector("#flowRows"),
   valuationRows: document.querySelector("#valuationRows"),
   topMoverList: document.querySelector("#topMoverList"),
+  historyList: document.querySelector("#historyList"),
   themeCards: document.querySelector("#themeCards"),
   newsList: document.querySelector("#newsList"),
   searchInput: document.querySelector("#searchInput"),
@@ -70,6 +73,14 @@ async function loadReport() {
     themes: report.themes || [],
     news: report.news || [],
   };
+}
+
+async function loadHistory() {
+  const response = await fetch("./api/history", { cache: "no-store" }).catch(() => null);
+  if (!response || !response.ok) return;
+  const payload = await response.json();
+  state.history = payload.items || [];
+  renderHistory();
 }
 
 function setAnalyzeState(isLoading, message) {
@@ -136,6 +147,7 @@ async function runAnalysis() {
       themes: payload.report.themes || [],
       news: payload.report.news || [],
     };
+    loadHistory();
     render();
     setAnalyzeState(false, payload.message || "새 분석 결과 표시 중");
   } catch (error) {
@@ -160,6 +172,7 @@ async function runTopMovers() {
       throw new Error(payload.message || "Top 종목 분석 실패");
     }
     state.topMovers = payload;
+    loadHistory();
     setAnalyzeState(false, payload.message || "Top 종목 표시 중");
   } catch (error) {
     console.warn(error);
@@ -185,12 +198,52 @@ async function analyzeStockDetail(code) {
       throw new Error(payload.message || "상세 분석 실패");
     }
     state.stockDetails[code] = payload.detail;
+    loadHistory();
   } catch (error) {
     console.warn(error);
     state.stockDetails[code] = { error: error.message };
   } finally {
     state.loadingDetailCode = null;
     render();
+  }
+}
+
+async function openHistoryItem(id) {
+  state.isHistoryLoading = true;
+  renderHistory();
+  try {
+    const response = await fetch(`./api/history/${encodeURIComponent(id)}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.message || "기록을 불러오지 못했습니다.");
+    }
+    const record = payload.record;
+    if (record.kind === "scan") {
+      state.report = {
+        ...record.payload,
+        stocks: (record.payload.stocks || []).map(normalizeStock),
+        themes: record.payload.themes || [],
+        news: record.payload.news || [],
+      };
+      state.tab = "picks";
+    } else if (record.kind === "top") {
+      state.topMovers = record.payload;
+      state.tab = "top";
+    } else if (record.kind === "detail") {
+      if (record.payload.code) {
+        state.stockDetails[record.payload.code] = record.payload.detail;
+      }
+      state.tab = "picks";
+    }
+    syncTabs();
+    render();
+    setAnalyzeState(false, `${record.title} 기록을 불러왔습니다.`);
+  } catch (error) {
+    console.warn(error);
+    setAnalyzeState(false, `기록 로드 실패: ${error.message}`);
+  } finally {
+    state.isHistoryLoading = false;
+    renderHistory();
   }
 }
 
@@ -234,6 +287,13 @@ function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return `${date.toLocaleString("ko-KR")} 생성`;
+}
+
+function shortDate(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" });
 }
 
 function parsePer(value) {
@@ -561,6 +621,27 @@ function renderTopMovers() {
     : `<p class="empty">이 탭에서 분석 실행 버튼을 누르면 오늘 상한가·하한가 종목이 표시됩니다.</p>`;
 }
 
+function renderHistory() {
+  if (!els.historyList) return;
+  if (state.isHistoryLoading) {
+    els.historyList.innerHTML = `<p class="empty">기록을 불러오는 중입니다.</p>`;
+    return;
+  }
+  els.historyList.innerHTML = state.history.length
+    ? state.history
+        .map(
+          (item) => `
+            <button class="history-item" type="button" data-history-id="${item.id}">
+              <span>${shortDate(item.generated_at)}</span>
+              <strong>${item.title}</strong>
+              <em>${item.kind}</em>
+            </button>
+          `
+        )
+        .join("")
+    : `<p class="empty">아직 저장된 분석 기록이 없습니다.</p>`;
+}
+
 function render() {
   if (!state.report) return;
   const items = filteredStocks();
@@ -573,17 +654,25 @@ function render() {
   renderValuation(items);
   renderThemes();
   renderTopMovers();
+  renderHistory();
   renderNews();
+}
+
+function syncTabs() {
+  els.tabs.forEach((tab) => tab.classList.toggle("is-active", tab.dataset.tab === state.tab));
+  els.panels.forEach((panel) => panel.classList.toggle("is-active", panel.id === state.tab));
+  updateAnalyzeButton();
 }
 
 els.tabs.forEach((button) => {
   button.addEventListener("click", () => {
     state.tab = button.dataset.tab;
-    els.tabs.forEach((tab) => tab.classList.toggle("is-active", tab === button));
-    els.panels.forEach((panel) => panel.classList.toggle("is-active", panel.id === state.tab));
-    updateAnalyzeButton();
+    syncTabs();
     if (state.tab === "top") {
       els.analyzeStatus.textContent = "Top 종목 탭에서는 분석 실행 버튼으로 상한가·하한가를 불러옵니다.";
+    } else if (state.tab === "history") {
+      loadHistory();
+      els.analyzeStatus.textContent = "기록을 누르면 해당 분석 결과가 화면에 복원됩니다.";
     }
   });
 });
@@ -609,11 +698,17 @@ els.pickCards.addEventListener("click", (event) => {
   if (!button) return;
   analyzeStockDetail(button.dataset.detailCode);
 });
+els.historyList.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-history-id]");
+  if (!button) return;
+  openHistoryItem(button.dataset.historyId);
+});
 
 loadReport()
   .then((report) => {
     state.report = report;
     render();
+    loadHistory();
     setAnalyzeState(false, report.source?.mode === "empty" ? "아직 분석을 실행하지 않았습니다." : "기존 분석 결과 표시 중");
   })
   .catch((error) => {

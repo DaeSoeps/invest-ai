@@ -24,6 +24,7 @@ from src.generate_report import (
 
 ROOT = Path(__file__).resolve().parent
 REPORT_PATH = ROOT / "data" / "report.json"
+HISTORY_DIR = ROOT / "data" / "history"
 ANALYZE_COOLDOWN_SECONDS = 30
 _analyze_lock = threading.Lock()
 _last_analyze_at: float | None = None
@@ -37,6 +38,50 @@ def strip_tags(value: str) -> str:
 
 def parse_number_text(value: str) -> str:
     return re.sub(r"\s+", " ", strip_tags(value))
+
+
+def history_id(prefix: str) -> str:
+    return f"{prefix}-{time.strftime('%Y%m%d-%H%M%S')}"
+
+
+def save_history(kind: str, payload: dict, title: str) -> dict:
+    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    generated_at = payload.get("generated_at") or time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    item_id = history_id(kind)
+    record = {
+        "id": item_id,
+        "kind": kind,
+        "title": title,
+        "generated_at": generated_at,
+        "payload": payload,
+    }
+    path = HISTORY_DIR / f"{item_id}.json"
+    path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {key: record[key] for key in ("id", "kind", "title", "generated_at")}
+
+
+def list_history(limit: int = 80) -> list[dict]:
+    if not HISTORY_DIR.is_dir():
+        return []
+    items = []
+    for path in sorted(HISTORY_DIR.glob("*.json"), reverse=True):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        items.append({key: record.get(key, "") for key in ("id", "kind", "title", "generated_at")})
+        if len(items) >= limit:
+            break
+    return items
+
+
+def read_history(item_id: str) -> dict | None:
+    if not re.fullmatch(r"[a-z-]+-\d{8}-\d{6}", item_id):
+        return None
+    path = HISTORY_DIR / f"{item_id}.json"
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 THEME_RULES = [
@@ -192,6 +237,17 @@ class InvestAIHandler(BaseHTTPRequestHandler):
         if self.path == "/api/report":
             self.send_json_file(REPORT_PATH)
             return
+        if self.path == "/api/history":
+            self.send_json({"ok": True, "items": list_history()})
+            return
+        if self.path.startswith("/api/history/"):
+            item_id = unquote(self.path.rsplit("/", 1)[-1])
+            record = read_history(item_id)
+            if not record:
+                self.send_json({"ok": False, "message": "기록을 찾지 못했습니다."}, status=404)
+                return
+            self.send_json({"ok": True, "record": record})
+            return
 
         requested = self.path.split("?", 1)[0]
         if requested in {"", "/"}:
@@ -286,11 +342,12 @@ class InvestAIHandler(BaseHTTPRequestHandler):
             return
 
         report = json.loads(REPORT_PATH.read_text(encoding="utf-8"))
+        history = save_history("scan", report, "핫한 후보 스캔")
         mode = report.get("source", {}).get("mode")
         message = "핫한 후보 스캔이 완료되었습니다."
         if mode == "fallback":
             message = "정량 지표 중심 임시 리포트를 표시합니다."
-        self.send_json({"ok": True, "message": message, "report": report})
+        self.send_json({"ok": True, "message": message, "report": report, "history": history})
 
     def handle_analyze_stock(self) -> None:
         global _last_stock_analyze_at
@@ -367,7 +424,12 @@ class InvestAIHandler(BaseHTTPRequestHandler):
         for key in ("summary", "technical", "news", "valuation", "risk"):
             if isinstance(detail.get(key), str):
                 detail[key] = remove_flow_claims(detail[key])
-        self.send_json({"ok": True, "message": f"{stock.get('name')} 상세 분석 완료", "code": code, "detail": detail})
+        history = save_history(
+            "detail",
+            {"code": code, "stock": stock, "detail": detail, "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")},
+            f"{stock.get('name')} 상세 분석",
+        )
+        self.send_json({"ok": True, "message": f"{stock.get('name')} 상세 분석 완료", "code": code, "detail": detail, "history": history})
 
     def handle_top_movers(self) -> None:
         try:
@@ -376,15 +438,13 @@ class InvestAIHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self.send_json({"ok": False, "message": f"Top 종목 데이터를 가져오지 못했습니다: {exc}"}, status=500)
             return
-        self.send_json(
-            {
-                "ok": True,
-                "message": "상한가/하한가 종목을 불러왔습니다.",
-                "generated_at": time.time(),
-                "upper": upper,
-                "lower": lower,
-            }
-        )
+        payload = {
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "upper": upper,
+            "lower": lower,
+        }
+        history = save_history("top", payload, "상한가·하한가 Top 10")
+        self.send_json({"ok": True, "message": "상한가/하한가 종목을 불러왔습니다.", **payload, "history": history})
 
     def send_json_file(self, path: Path) -> None:
         if not path.is_file():
